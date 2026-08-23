@@ -652,26 +652,27 @@ async def handle_show_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             original_text = text_data["original_text"]
             logger.info(f"Original text length: {len(original_text)}")
             
-            # ========== اضافه شده: دریافت نام کانال ==========
+            # ========== اصلاح: دریافت نام کانال و نمایش در بالای متن ==========
             channel_name = await get_channel_name(context)
-            # =================================================
             
-            if len(original_text) > 200:
-                truncated_text = original_text[:197] + "..."
-                # ========== اضافه شده: نمایش نام کانال ==========
+            # ساخت متن نهایی با نام کانال در بالای آن
+            # فرمت: خط جداکننده بالا + نام کانال + متن اصلی + خط جداکننده پایین
+            display_text = f"----------------------------------\n{channel_name}\n\n{original_text}\n----------------------------------"
+            # ================================================================
+            
+            if len(display_text) > 200:
+                # اگر متن کامل از حد مجاز بیشتر بود، آن را کوتاه کنیم
+                truncated_text = display_text[:197] + "..."
                 await query.answer(
-                    text=f"{truncated_text}\n\n⚠️ متن کامل در پیام کانال موجود است.\n\n📢 نام کانال فعلی: {channel_name}",
+                    text=truncated_text,
                     show_alert=True
                 )
-                # =================================================
-                logger.info(f"Text truncated (was {len(original_text)} chars)")
+                logger.info(f"Text truncated (was {len(display_text)} chars)")
             else:
-                # ========== اضافه شده: نمایش نام کانال ==========
                 await query.answer(
-                    text=f"{original_text}\n\n📢 نام کانال فعلی: {channel_name}",
+                    text=display_text,
                     show_alert=True
                 )
-                # =================================================
                 logger.info("Telegram alert sent successfully")
         else:
             logger.error("Original text not found")

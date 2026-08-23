@@ -32,6 +32,11 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN environment variable not set!")
 
+# ========== اضافه شده: Owner Configuration ==========
+OWNER_USER_ID = 8250229395  # فقط این کاربر می‌تواند از ربات استفاده کند
+OWNER_USERNAME = "@ID_ALI_BI_GHAM"  # برای نمایش به کاربران غیرمجاز
+# ====================================================
+
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise ValueError("DATABASE_URL environment variable not set!")
@@ -234,7 +239,47 @@ async def start_web_server():
     await site.start()
     logger.info(f"Web server started on port {PORT}")
 
+# -------------------- Owner Check --------------------
+def is_owner(user_id: int) -> bool:
+    """Check if the user is the owner of the bot."""
+    return user_id == OWNER_USER_ID
+
+async def check_owner(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Check if the user is the owner and reply with error if not."""
+    user_id = update.effective_user.id
+    if is_owner(user_id):
+        return True
+    
+    # User is not owner - show error message
+    error_text = (
+        "❌ فقط مالک ربات می‌تواند از این ربات استفاده کند.\n\n"
+        "برای ساخت ربات برای خودتان به مالک پیام دهید:\n"
+        f"{OWNER_USERNAME}"
+    )
+    
+    if update.message:
+        await update.message.reply_text(error_text)
+    elif update.callback_query:
+        await update.callback_query.answer()
+        await update.callback_query.edit_message_text(error_text)
+    
+    return False
+
 # -------------------- Helper Functions --------------------
+async def get_channel_name(context: ContextTypes.DEFAULT_TYPE) -> str:
+    """Get the current channel name from Telegram API."""
+    try:
+        chat = await context.bot.get_chat(chat_id=CHANNEL_ID)
+        if chat.title:
+            return chat.title
+        elif chat.username:
+            return f"@{chat.username}"
+        else:
+            return CHANNEL_ID
+    except TelegramError as e:
+        logger.error(f"Failed to get channel name: {e}")
+        return CHANNEL_ID  # Fallback to channel ID
+
 async def check_bot_admin_status(context: ContextTypes.DEFAULT_TYPE) -> bool:
     """Check if the bot is an administrator in the channel."""
     try:
@@ -343,9 +388,13 @@ async def send_channel_message(
 # -------------------- Handlers --------------------
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /start command."""
-    user = update.effective_user
-    user_id = user.id
+    user_id = update.effective_user.id
     logger.info(f"Start command from user: {user_id}")
+    
+    # ========== اضافه شده: بررسی مالک ==========
+    if not await check_owner(update, context):
+        return
+    # ==========================================
     
     is_admin = await check_bot_admin_status(context)
     
@@ -353,7 +402,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await create_or_update_user(user_id, True)
         
         welcome_text = (
-            f"👋 سلام {user.first_name}!\n\n"
+            f"👋 سلام مالک عزیز!\n\n"
             "ربات آماده است.\n"
             "برای ارسال محتوا به کانال، روی دکمه زیر بزنید."
         )
@@ -371,7 +420,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await create_or_update_user(user_id, False)
         
         welcome_text = (
-            f"👋 سلام {user.first_name}!\n\n"
+            f"👋 سلام مالک عزیز!\n\n"
             "❌ برای استفاده از ربات، ابتدا باید ربات را در کانال @BI_GH_AM به عنوان Administrator اضافه کنید."
         )
         
@@ -390,13 +439,18 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user_id = update.effective_user.id
     logger.info(f"Cancel command from user: {user_id}")
     
+    # ========== اضافه شده: بررسی مالک ==========
+    if not await check_owner(update, context):
+        return
+    # ==========================================
+    
     context.user_data.clear()
     
     is_admin = await check_bot_admin_status(context)
     
     if is_admin:
         welcome_text = (
-            f"👋 سلام {update.effective_user.first_name}!\n\n"
+            f"👋 سلام مالک عزیز!\n\n"
             "ربات آماده است.\n"
             "برای ارسال محتوا به کانال، روی دکمه زیر بزنید."
         )
@@ -419,7 +473,18 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle all callback queries."""
     query = update.callback_query
-    logger.info(f"Callback received: {query.data} from user: {query.from_user.id}")
+    user_id = update.effective_user.id
+    logger.info(f"Callback received: {query.data} from user: {user_id}")
+    
+    # ========== اضافه شده: بررسی مالک ==========
+    if not is_owner(user_id):
+        await query.answer()
+        await query.edit_message_text(
+            "❌ فقط مالک ربات می‌تواند از این ربات استفاده کند.\n\n"
+            f"برای ساخت ربات برای خودتان به مالک پیام دهید:\n{OWNER_USERNAME}"
+        )
+        return
+    # ============================================
     
     if query.data.startswith("show_"):
         await handle_show_text(update, context)
@@ -587,18 +652,26 @@ async def handle_show_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             original_text = text_data["original_text"]
             logger.info(f"Original text length: {len(original_text)}")
             
+            # ========== اضافه شده: دریافت نام کانال ==========
+            channel_name = await get_channel_name(context)
+            # =================================================
+            
             if len(original_text) > 200:
                 truncated_text = original_text[:197] + "..."
+                # ========== اضافه شده: نمایش نام کانال ==========
                 await query.answer(
-                    text=f"{truncated_text}\n\n⚠️ متن کامل در پیام کانال موجود است.",
+                    text=f"{truncated_text}\n\n⚠️ متن کامل در پیام کانال موجود است.\n\n📢 نام کانال فعلی: {channel_name}",
                     show_alert=True
                 )
+                # =================================================
                 logger.info(f"Text truncated (was {len(original_text)} chars)")
             else:
+                # ========== اضافه شده: نمایش نام کانال ==========
                 await query.answer(
-                    text=original_text,
+                    text=f"{original_text}\n\n📢 نام کانال فعلی: {channel_name}",
                     show_alert=True
                 )
+                # =================================================
                 logger.info("Telegram alert sent successfully")
         else:
             logger.error("Original text not found")
@@ -623,10 +696,15 @@ async def handle_media_message(update: Update, context: ContextTypes.DEFAULT_TYP
     user_id = update.effective_user.id
     logger.info(f"Media received from user: {user_id}")
     
+    # ========== اضافه شده: بررسی مالک ==========
+    if not await check_owner(update, context):
+        return
+    # ==========================================
+    
     if not context.user_data.get('waiting_for_text'):
         if await is_user_authorized(user_id, context):
             welcome_text = (
-                f"👋 سلام {update.effective_user.first_name}!\n\n"
+                f"👋 سلام مالک عزیز!\n\n"
                 "برای ارسال محتوا، ابتدا روی دکمه زیر بزنید."
             )
             keyboard = [[
@@ -674,6 +752,11 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_id = update.effective_user.id
     text = update.message.text
     logger.info(f"Text message received from user: {user_id}")
+    
+    # ========== اضافه شده: بررسی مالک ==========
+    if not await check_owner(update, context):
+        return
+    # ==========================================
     
     if context.user_data.get('waiting_for_text'):
         logger.info(f"User {user_id} is in content receiving mode")
@@ -741,7 +824,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         else:
             await create_or_update_user(user_id, True)
             welcome_text = (
-                f"👋 سلام {update.effective_user.first_name}!\n\n"
+                f"👋 سلام مالک عزیز!\n\n"
                 "ربات آماده است.\n"
                 "برای ارسال محتوا به کانال، روی دکمه زیر بزنید."
             )
@@ -757,7 +840,14 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def handle_unknown_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle non-text, non-media messages."""
-    logger.info(f"Unknown message from user: {update.effective_user.id}")
+    user_id = update.effective_user.id
+    logger.info(f"Unknown message from user: {user_id}")
+    
+    # ========== اضافه شده: بررسی مالک ==========
+    if not await check_owner(update, context):
+        return
+    # ==========================================
+    
     await update.message.reply_text(
         "❌ لطفاً فقط متن، عکس، ویدیو یا ویس ارسال کنید."
     )

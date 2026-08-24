@@ -250,19 +250,28 @@ async def check_owner(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
     if is_owner(user_id):
         return True
     
-    # User is not owner - show error message
-    error_text = (
-        "❌ فقط مالک ربات می‌تواند از این ربات استفاده کند.\n\n"
-        "برای ساخت ربات برای خودتان به مالک پیام دهید:\n"
-        f"{OWNER_USERNAME}"
-    )
-    
-    if update.message:
+    # ========== اصلاح: فقط در Private Chat (PV) پیام خطا نمایش داده شود ==========
+    # بررسی می‌کنیم که آیا درخواست از یک چت خصوصی (PV) آمده است یا خیر
+    if update.message and update.message.chat.type == "private":
+        # کاربر غیرمالک در PV - نمایش پیام خطا
+        error_text = (
+            "❌ فقط مالک ربات می‌تواند از این ربات استفاده کند.\n\n"
+            "برای ساخت ربات برای خودتان به مالک پیام دهید:\n"
+            f"{OWNER_USERNAME}"
+        )
         await update.message.reply_text(error_text)
-    elif update.callback_query:
+    elif update.callback_query and update.callback_query.message.chat.type == "private":
+        # کاربر غیرمالک در PV با کلیک روی دکمه - نمایش پیام خطا
+        error_text = (
+            "❌ فقط مالک ربات می‌تواند از این ربات استفاده کند.\n\n"
+            "برای ساخت ربات برای خودتان به مالک پیام دهید:\n"
+            f"{OWNER_USERNAME}"
+        )
         await update.callback_query.answer()
         await update.callback_query.edit_message_text(error_text)
+    # ========================================================================
     
+    # اگر در کانال یا گروه باشد، هیچ کاری انجام نمی‌دهیم و فقط False برمی‌گردانیم
     return False
 
 # -------------------- Helper Functions --------------------
@@ -478,11 +487,16 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     
     # ========== اضافه شده: بررسی مالک ==========
     if not is_owner(user_id):
-        await query.answer()
-        await query.edit_message_text(
-            "❌ فقط مالک ربات می‌تواند از این ربات استفاده کند.\n\n"
-            f"برای ساخت ربات برای خودتان به مالک پیام دهید:\n{OWNER_USERNAME}"
-        )
+        # فقط در PV پیام خطا نمایش داده شود
+        if query.message.chat.type == "private":
+            await query.answer()
+            await query.edit_message_text(
+                "❌ فقط مالک ربات می‌تواند از این ربات استفاده کند.\n\n"
+                f"برای ساخت ربات برای خودتان به مالک پیام دهید:\n{OWNER_USERNAME}"
+            )
+        else:
+            # در کانال یا گروه - فقط بی‌صدا پاسخ می‌دهیم
+            await query.answer()
         return
     # ============================================
     

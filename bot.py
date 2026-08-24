@@ -222,10 +222,12 @@ async def start_web_server():
     """Start aiohttp web server."""
     app = web.Application()
     
+    # Static files for webapp
     app.router.add_get('/webapp/', handle_webapp)
     app.router.add_get('/webapp/{path:.*}', handle_webapp)
     app.router.add_get('/', handle_webapp)
     
+    # API endpoint
     app.router.add_post('/api/text', handle_api_text)
     
     runner = web.AppRunner(app)
@@ -267,6 +269,7 @@ async def send_channel_message(
     media_file_id: Optional[str] = None
 ) -> Tuple[int, str]:
     """Send a message to the channel with inline button."""
+    # Channel header
     channel_header = (
         "┏━━━━━◥◣◆◢◤━━━━━┓\n"
         "   ᯽ VIP -- ALI ᯽\n"
@@ -275,29 +278,21 @@ async def send_channel_message(
         "┗━━━━━◥◣◆◢◤━━━━━┛"
     )
     
+    # Generate unique ID for this text
     unique_id = str(uuid.uuid4())
     logger.info(f"Generated unique_id: {unique_id}")
     
-    # Save text to database before creating button
-    save_success = await save_text_content(
-        unique_id=unique_id,
-        original_text=text,
-        user_id=update.effective_user.id,
-        channel_message_id=0
-    )
-    
-    if not save_success:
-        logger.error(f"Failed to save text content for unique_id: {unique_id}")
-        raise Exception("Failed to save text content")
-    
+    # Create inline keyboard with Web App button
+    webapp_url = f"{WEBAPP_URL}?text_id={unique_id}"
     keyboard = [[
         InlineKeyboardButton(
             "𝐁𝐈 𝐆𝐇𝐀𝐌",
-            callback_data=f"show_{unique_id}"
+            web_app=WebAppInfo(url=webapp_url)
         )
     ]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
+    # Send message to channel based on media type
     try:
         logger.info(f"Sending channel message with media_type: {media_type}")
         
@@ -323,16 +318,28 @@ async def send_channel_message(
                 reply_markup=reply_markup
             )
         else:
+            # Text only
+            full_text = channel_header + "\n\n" + text
             channel_msg = await context.bot.send_message(
                 chat_id=CHANNEL_ID,
-                text=channel_header,
+                text=full_text,
                 reply_markup=reply_markup
             )
         
         logger.info(f"Channel message sent successfully: {channel_msg.message_id}")
         
-        # Update channel_message_id in database
-        await update_channel_message_id(unique_id, channel_msg.message_id)
+        # Save text to database
+        save_success = await save_text_content(
+            unique_id=unique_id,
+            original_text=text,
+            user_id=update.effective_user.id,
+            channel_message_id=channel_msg.message_id,
+            media_type=media_type,
+            media_file_id=media_file_id
+        )
+        
+        if not save_success:
+            logger.error(f"Failed to save text content for unique_id: {unique_id}")
         
         return channel_msg.message_id, unique_id
         
@@ -420,10 +427,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     """Handle all callback queries."""
     query = update.callback_query
     logger.info(f"Callback received: {query.data} from user: {query.from_user.id}")
-    
-    if query.data.startswith("show_"):
-        await handle_show_text(update, context)
-        return
     
     if query.data == "check_admin":
         await handle_check_admin(update, context)
@@ -545,6 +548,7 @@ async def handle_send_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
         return
     
+    # Clear any previous pending data
     context.user_data.clear()
     context.user_data['waiting_for_text'] = True
     context.user_data['media_type'] = None
@@ -562,52 +566,6 @@ async def handle_send_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         "ارسال کنید."
     )
 
-async def handle_show_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle showing original text in popup when button is clicked."""
-    query = update.callback_query
-    callback_data = query.data
-    user_id = query.from_user.id
-    
-    logger.info("========== BUTTON CLICK ==========")
-    logger.info(f"Callback data: {repr(callback_data)}")
-    logger.info(f"User ID: {user_id}")
-    
-    try:
-        if not callback_data.startswith("show_"):
-            logger.warning(f"Invalid callback format: {callback_data}")
-            await query.answer("❌ دستور نامعتبر.", show_alert=True)
-            return
-        
-        unique_id = callback_data[5:]
-        logger.info(f"Extracted text ID: {unique_id}")
-        
-        text_data = await get_text_content(unique_id)
-        
-        if text_data and text_data.get("original_text"):
-            original_text = text_data["original_text"]
-            logger.info(f"Original text length: {len(original_text)}")
-            
-            if len(original_text) > 200:
-                truncated_text = original_text[:197] + "..."
-                await query.answer(
-                    text=f"{truncated_text}\n\n⚠️ متن کامل در پیام کانال موجود است.",
-                    show_alert=True
-                )
-                logger.info(f"Text truncated (was {len(original_text)} chars)")
-            else:
-                await query.answer(
-                    text=original_text,
-                    show_alert=True
-                )
-                logger.info("Telegram alert sent successfully")
-        else:
-            logger.error("Original text not found")
-            await query.answer("❌ متن یافت نشد.", show_alert=True)
-            
-    except Exception as e:
-        logger.exception(f"Error in handle_show_text: {e}")
-        await query.answer("❌ خطا در نمایش متن.", show_alert=True)
-
 async def handle_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle cancel button from inline keyboard."""
     query = update.callback_query
@@ -624,6 +582,7 @@ async def handle_media_message(update: Update, context: ContextTypes.DEFAULT_TYP
     logger.info(f"Media received from user: {user_id}")
     
     if not context.user_data.get('waiting_for_text'):
+        # User is not in content receiving mode
         if await is_user_authorized(user_id, context):
             welcome_text = (
                 f"👋 سلام {update.effective_user.first_name}!\n\n"
@@ -639,18 +598,19 @@ async def handle_media_message(update: Update, context: ContextTypes.DEFAULT_TYP
     media_type = None
     media_file_id = None
     
+    # Detect media type
     if update.message.photo:
         media_type = "photo"
         media_file_id = update.message.photo[-1].file_id
-        logger.info(f"Photo received")
+        logger.info(f"Photo received, file_id: {media_file_id[:20]}...")
     elif update.message.video:
         media_type = "video"
         media_file_id = update.message.video.file_id
-        logger.info(f"Video received")
+        logger.info(f"Video received, file_id: {media_file_id[:20]}...")
     elif update.message.voice:
         media_type = "voice"
         media_file_id = update.message.voice.file_id
-        logger.info(f"Voice received")
+        logger.info(f"Voice received, file_id: {media_file_id[:20]}...")
     else:
         await update.message.reply_text(
             "❌ نوع فایل پشتیبانی نمی‌شود.\n"
@@ -658,6 +618,7 @@ async def handle_media_message(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         return
     
+    # Store media in user_data
     context.user_data['media_type'] = media_type
     context.user_data['media_file_id'] = media_file_id
     
@@ -677,6 +638,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     if context.user_data.get('waiting_for_text'):
         logger.info(f"User {user_id} is in content receiving mode")
+        logger.info(f"Text received: {text[:50]}...")
         
         if not await check_bot_admin_status(context):
             context.user_data.clear()
@@ -692,15 +654,18 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             return
         
         try:
+            # Get pending media info
             media_type = context.user_data.get('media_type')
             media_file_id = context.user_data.get('media_file_id')
             
+            # Send message to channel
             logger.info(f"Sending to channel with media_type: {media_type}")
             channel_msg_id, unique_id = await send_channel_message(
                 update, context, text, media_type, media_file_id
             )
-            logger.info(f"Message sent to channel successfully: {channel_msg_id}")
+            logger.info(f"Message sent to channel successfully: {channel_msg_id}, unique_id: {unique_id}")
             
+            # Clear user data
             context.user_data.clear()
             
             success_text = (
@@ -727,6 +692,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         return
     
+    # If user is not in content receiving mode
     if not await is_user_authorized(user_id, context):
         if not await check_bot_admin_status(context):
             keyboard = [[
@@ -778,20 +744,26 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def main() -> None:
     """Start the bot and web server."""
     try:
+        # Initialize database
         await init_db_pool()
         
+        # Start web server
         await start_web_server()
         
+        # Create application
         application = Application.builder().token(BOT_TOKEN).build()
         logger.info("Application created successfully.")
         
+        # Add command handlers
         application.add_handler(CommandHandler("start", start_command))
         application.add_handler(CommandHandler("cancel", cancel_command))
         logger.info("Command handlers added.")
         
+        # Add callback query handler
         application.add_handler(CallbackQueryHandler(button_callback))
         logger.info("Callback handler added.")
         
+        # Add message handlers
         application.add_handler(MessageHandler(filters.PHOTO, handle_media_message))
         application.add_handler(MessageHandler(filters.VIDEO, handle_media_message))
         application.add_handler(MessageHandler(filters.VOICE, handle_media_message))
@@ -799,17 +771,20 @@ async def main() -> None:
         application.add_handler(MessageHandler(~filters.TEXT & ~filters.PHOTO & ~filters.VIDEO & ~filters.VOICE, handle_unknown_message))
         logger.info("Message handlers added.")
         
+        # Add error handler
         application.add_error_handler(error_handler)
         logger.info("Error handler added.")
         
         logger.info("Starting bot...")
         
+        # Start polling
         await application.initialize()
         await application.start()
         await application.updater.start_polling()
         
         logger.info("Bot is running. Press Ctrl+C to stop.")
         
+        # Keep the bot running
         try:
             while True:
                 await asyncio.sleep(1)

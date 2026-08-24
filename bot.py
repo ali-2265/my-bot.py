@@ -44,6 +44,11 @@ PORT = int(os.getenv("PORT", "10000"))
 CHANNEL_USERNAME = "@BI_GH_AM"
 CHANNEL_ID = CHANNEL_USERNAME
 
+# ========== اضافه شده: مشخصات مالک ==========
+OWNER_USER_ID = 8250229395
+OWNER_USERNAME = "@ID_ALI_BI_GHAM"
+# ==========================================
+
 # -------------------- Database Connection --------------------
 db_pool = None
 
@@ -237,6 +242,35 @@ async def start_web_server():
     logger.info(f"Web server started on port {PORT}")
 
 # -------------------- Helper Functions --------------------
+def is_owner(user_id: int) -> bool:
+    """Check if the user is the owner of the bot."""
+    return user_id == OWNER_USER_ID
+
+async def check_owner(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Check if the user is the owner and show error if not."""
+    user_id = update.effective_user.id
+    if is_owner(user_id):
+        return True
+    
+    # Only show error in PV
+    if update.message and update.message.chat.type == "private":
+        error_text = (
+            "❌ این ربات فقط برای مالک قابل استفاده است.\n\n"
+            "برای ساخت ربات شخصی خودتان به مالک پیام دهید:\n"
+            f"{OWNER_USERNAME}"
+        )
+        await update.message.reply_text(error_text)
+    elif update.callback_query and update.callback_query.message.chat.type == "private":
+        error_text = (
+            "❌ این ربات فقط برای مالک قابل استفاده است.\n\n"
+            "برای ساخت ربات شخصی خودتان به مالک پیام دهید:\n"
+            f"{OWNER_USERNAME}"
+        )
+        await update.callback_query.answer()
+        await update.callback_query.edit_message_text(error_text)
+    
+    return False
+
 async def check_bot_admin_status(context: ContextTypes.DEFAULT_TYPE) -> bool:
     """Check if the bot is an administrator in the channel."""
     try:
@@ -296,8 +330,7 @@ async def send_channel_message(
         logger.error(f"Failed to save text content for unique_id: {unique_id}")
         raise Exception("Failed to save text content")
     
-    # ========== اصلاح: استفاده از callback_data به جای web_app ==========
-    # چون دکمه web_app در کانال پشتیبانی نمی‌شود
+    # Create inline keyboard with callback_data
     keyboard = [[
         InlineKeyboardButton(
             "𝐁𝐈 𝐆𝐇𝐀𝐌",
@@ -305,7 +338,6 @@ async def send_channel_message(
         )
     ]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    # ==================================================================
     
     # Send message to channel based on media type
     try:
@@ -333,14 +365,12 @@ async def send_channel_message(
                 reply_markup=reply_markup
             )
         else:
-            # ========== اصلاح: فقط هدر ثابت، بدون متن کاربر ==========
-            # Text only - فقط هدر ثابت نمایش داده شود، متن کاربر مخفی می‌ماند
+            # Text only - فقط هدر ثابت، بدون متن کاربر
             channel_msg = await context.bot.send_message(
                 chat_id=CHANNEL_ID,
                 text=channel_header,
                 reply_markup=reply_markup
             )
-            # ==========================================================
         
         logger.info(f"Channel message sent successfully: {channel_msg.message_id}")
         
@@ -359,6 +389,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     user = update.effective_user
     user_id = user.id
     logger.info(f"Start command from user: {user_id}")
+    
+    # ========== بررسی مالک ==========
+    if not await check_owner(update, context):
+        return
+    # ================================
     
     is_admin = await check_bot_admin_status(context)
     
@@ -403,6 +438,11 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user_id = update.effective_user.id
     logger.info(f"Cancel command from user: {user_id}")
     
+    # ========== بررسی مالک ==========
+    if not await check_owner(update, context):
+        return
+    # ================================
+    
     context.user_data.clear()
     
     is_admin = await check_bot_admin_status(context)
@@ -432,13 +472,27 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle all callback queries."""
     query = update.callback_query
-    logger.info(f"Callback received: {query.data} from user: {query.from_user.id}")
+    user_id = update.effective_user.id
+    logger.info(f"Callback received: {query.data} from user: {user_id}")
     
-    # ========== مدیریت دکمه show_ ==========
+    # ========== دکمه show_ برای همه کاربران (نمایش متن) ==========
     if query.data.startswith("show_"):
         await handle_show_text(update, context)
         return
-    # ========================================
+    # ==============================================================
+    
+    # ========== سایر دکمه‌ها فقط برای مالک ==========
+    if not is_owner(user_id):
+        if query.message.chat.type == "private":
+            await query.answer()
+            await query.edit_message_text(
+                "❌ این ربات فقط برای مالک قابل استفاده است.\n\n"
+                f"برای ساخت ربات شخصی خودتان به مالک پیام دهید:\n{OWNER_USERNAME}"
+            )
+        else:
+            await query.answer()
+        return
+    # ================================================
     
     if query.data == "check_admin":
         await handle_check_admin(update, context)
@@ -603,10 +657,8 @@ async def handle_show_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             original_text = text_data["original_text"]
             logger.info(f"Original text length: {len(original_text)}")
             
-            # ========== اصلاح: نمایش مستقیم متن با Popup ==========
-            # نمایش متن به صورت Popup فوری بدون ارسال به PV
+            # نمایش مستقیم متن با Popup
             if len(original_text) > 200:
-                # اگر متن طولانی‌تر از حد مجاز است، آن را کوتاه کنیم
                 truncated_text = original_text[:197] + "..."
                 await query.answer(
                     text=f"{truncated_text}\n\n⚠️ متن کامل در پیام کانال موجود است.",
@@ -614,13 +666,11 @@ async def handle_show_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 )
                 logger.info(f"Text truncated (was {len(original_text)} chars)")
             else:
-                # نمایش کامل متن در Popup
                 await query.answer(
                     text=original_text,
                     show_alert=True
                 )
                 logger.info(f"Text shown in popup to user {user_id}")
-            # =======================================================
             
         else:
             logger.error("Original text not found")
@@ -644,6 +694,17 @@ async def handle_media_message(update: Update, context: ContextTypes.DEFAULT_TYP
     """Handle media messages (photo, video, voice)."""
     user_id = update.effective_user.id
     logger.info(f"Media received from user: {user_id}")
+    
+    # ========== بررسی مالک ==========
+    if not is_owner(user_id):
+        if update.message.chat.type == "private":
+            error_text = (
+                "❌ این ربات فقط برای مالک قابل استفاده است.\n\n"
+                f"برای ساخت ربات شخصی خودتان به مالک پیام دهید:\n{OWNER_USERNAME}"
+            )
+            await update.message.reply_text(error_text)
+        return
+    # ================================
     
     if not context.user_data.get('waiting_for_text'):
         # User is not in content receiving mode
@@ -699,6 +760,17 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_id = update.effective_user.id
     text = update.message.text
     logger.info(f"Text message received from user: {user_id}")
+    
+    # ========== بررسی مالک ==========
+    if not is_owner(user_id):
+        if update.message.chat.type == "private":
+            error_text = (
+                "❌ این ربات فقط برای مالک قابل استفاده است.\n\n"
+                f"برای ساخت ربات شخصی خودتان به مالک پیام دهید:\n{OWNER_USERNAME}"
+            )
+            await update.message.reply_text(error_text)
+        return
+    # ================================
     
     if context.user_data.get('waiting_for_text'):
         logger.info(f"User {user_id} is in content receiving mode")
@@ -787,7 +859,20 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def handle_unknown_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle non-text, non-media messages."""
-    logger.info(f"Unknown message from user: {update.effective_user.id}")
+    user_id = update.effective_user.id
+    logger.info(f"Unknown message from user: {user_id}")
+    
+    # ========== بررسی مالک ==========
+    if not is_owner(user_id):
+        if update.message.chat.type == "private":
+            error_text = (
+                "❌ این ربات فقط برای مالک قابل استفاده است.\n\n"
+                f"برای ساخت ربات شخصی خودتان به مالک پیام دهید:\n{OWNER_USERNAME}"
+            )
+            await update.message.reply_text(error_text)
+        return
+    # ================================
+    
     await update.message.reply_text(
         "❌ لطفاً فقط متن، عکس، ویدیو یا ویس ارسال کنید."
     )

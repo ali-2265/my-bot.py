@@ -333,13 +333,14 @@ async def send_channel_message(
                 reply_markup=reply_markup
             )
         else:
-            # Text only
-            full_text = channel_header + "\n\n" + text
+            # ========== اصلاح: فقط هدر ثابت، بدون متن کاربر ==========
+            # Text only - فقط هدر ثابت نمایش داده شود، متن کاربر مخفی می‌ماند
             channel_msg = await context.bot.send_message(
                 chat_id=CHANNEL_ID,
-                text=full_text,
+                text=channel_header,
                 reply_markup=reply_markup
             )
+            # ==========================================================
         
         logger.info(f"Channel message sent successfully: {channel_msg.message_id}")
         
@@ -433,11 +434,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     query = update.callback_query
     logger.info(f"Callback received: {query.data} from user: {query.from_user.id}")
     
-    # ========== اضافه شده: مدیریت دکمه show_ ==========
+    # ========== مدیریت دکمه show_ ==========
     if query.data.startswith("show_"):
         await handle_show_text(update, context)
         return
-    # ================================================
+    # ========================================
     
     if query.data == "check_admin":
         await handle_check_admin(update, context)

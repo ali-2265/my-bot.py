@@ -603,25 +603,24 @@ async def handle_show_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             original_text = text_data["original_text"]
             logger.info(f"Original text length: {len(original_text)}")
             
-            # ارسال متن به PV کاربر
-            try:
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text=original_text
+            # ========== اصلاح: نمایش مستقیم متن با Popup ==========
+            # نمایش متن به صورت Popup فوری بدون ارسال به PV
+            if len(original_text) > 200:
+                # اگر متن طولانی‌تر از حد مجاز است، آن را کوتاه کنیم
+                truncated_text = original_text[:197] + "..."
+                await query.answer(
+                    text=f"{truncated_text}\n\n⚠️ متن کامل در پیام کانال موجود است.",
+                    show_alert=True
                 )
-                logger.info(f"Text sent to PV of user {user_id}")
-                
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text="✅ متن با موفقیت ارسال شد"
+                logger.info(f"Text truncated (was {len(original_text)} chars)")
+            else:
+                # نمایش کامل متن در Popup
+                await query.answer(
+                    text=original_text,
+                    show_alert=True
                 )
-                logger.info(f"Success message sent to PV of user {user_id}")
-                
-                await query.answer("✅ متن برای شما ارسال شد.", show_alert=False)
-                
-            except TelegramError as e:
-                logger.error(f"Failed to send message to user {user_id}: {e}")
-                await query.answer("❌ خطا در ارسال متن. لطفاً دوباره تلاش کنید.", show_alert=True)
+                logger.info(f"Text shown in popup to user {user_id}")
+            # =======================================================
             
         else:
             logger.error("Original text not found")

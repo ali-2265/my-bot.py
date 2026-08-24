@@ -485,7 +485,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     user_id = update.effective_user.id
     logger.info(f"Callback received: {query.data} from user: {user_id}")
     
-    # ========== اضافه شده: بررسی مالک ==========
+    # ========== اصلاح: دکمه‌های show_ برای همه کاربران آزاد باشد ==========
+    # دکمه‌های show_ (مشاهده متن) برای همه کاربران قابل استفاده است
+    if query.data.startswith("show_"):
+        await handle_show_text(update, context)
+        return
+    # ======================================================================
+    
+    # ========== سایر دکمه‌ها فقط برای مالک ==========
     if not is_owner(user_id):
         # فقط در PV پیام خطا نمایش داده شود
         if query.message.chat.type == "private":
@@ -499,10 +506,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.answer()
         return
     # ============================================
-    
-    if query.data.startswith("show_"):
-        await handle_show_text(update, context)
-        return
     
     if query.data == "check_admin":
         await handle_check_admin(update, context)
@@ -666,28 +669,52 @@ async def handle_show_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             original_text = text_data["original_text"]
             logger.info(f"Original text length: {len(original_text)}")
             
-            # ========== اصلاح: دریافت نام کانال و نمایش در بالای متن ==========
+            # ========== اصلاح: ارسال متن به PV کاربر ==========
+            # 1. دریافت نام کانال
             channel_name = await get_channel_name(context)
             
-            # ساخت متن نهایی با نام کانال در بالای آن
-            # فرمت: خط جداکننده بالا + نام کانال + متن اصلی + خط جداکننده پایین
-            display_text = f"----------------------------------\n{channel_name}\n\n{original_text}\n----------------------------------"
+            # 2. حذف خطوط اضافی از متن اصلی
+            cleaned_text = original_text
+            # حذف خطوط جداکننده از ابتدا و انتهای متن
+            while cleaned_text.startswith("----------------------------------") or cleaned_text.startswith("_------------------------"):
+                cleaned_text = cleaned_text[len("----------------------------------"):].lstrip()
+            while cleaned_text.endswith("----------------------------------") or cleaned_text.endswith("_------------------------"):
+                cleaned_text = cleaned_text[:-len("----------------------------------")].rstrip()
+            # حذف خطوط جداکننده اضافی در بین متن
+            lines = cleaned_text.split('\n')
+            filtered_lines = []
+            for line in lines:
+                if line.strip() != "----------------------------------" and line.strip() != "_------------------------":
+                    filtered_lines.append(line)
+            cleaned_text = '\n'.join(filtered_lines).strip()
+            
+            # 3. ساخت متن نهایی با نام کانال در بالای آن (بدون خطوط جداکننده)
+            display_text = f"{channel_name}\n\n{cleaned_text}"
+            
+            # 4. ارسال متن به PV کاربر
+            try:
+                # ارسال پیام به کاربر
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=display_text
+                )
+                logger.info(f"Text sent to PV of user {user_id}")
+                
+                # 5. ارسال پیام موفقیت
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text="✅ متن با موفقیت ارسال شد"
+                )
+                logger.info(f"Success message sent to PV of user {user_id}")
+                
+                # پاسخ به کلیک دکمه
+                await query.answer("✅ متن برای شما ارسال شد.", show_alert=False)
+                
+            except TelegramError as e:
+                logger.error(f"Failed to send message to user {user_id}: {e}")
+                await query.answer("❌ خطا در ارسال متن. لطفاً دوباره تلاش کنید.", show_alert=True)
             # ================================================================
             
-            if len(display_text) > 200:
-                # اگر متن کامل از حد مجاز بیشتر بود، آن را کوتاه کنیم
-                truncated_text = display_text[:197] + "..."
-                await query.answer(
-                    text=truncated_text,
-                    show_alert=True
-                )
-                logger.info(f"Text truncated (was {len(display_text)} chars)")
-            else:
-                await query.answer(
-                    text=display_text,
-                    show_alert=True
-                )
-                logger.info("Telegram alert sent successfully")
         else:
             logger.error("Original text not found")
             await query.answer("❌ متن یافت نشد.", show_alert=True)
@@ -922,15 +949,3 @@ async def main() -> None:
             logger.info("Shutting down...")
         finally:
             await application.updater.stop()
-            await application.stop()
-            await application.shutdown()
-            if db_pool:
-                await db_pool.close()
-            logger.info("Bot stopped.")
-        
-    except Exception as e:
-        logger.exception(f"Fatal error in main: {e}")
-        raise
-
-if __name__ == "__main__":
-    asyncio.run(main())
